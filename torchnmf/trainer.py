@@ -24,19 +24,19 @@ class BetaMu(Optimizer):
             (Default: ``(0.0, 1.0)``)
     """
 
-    def __init__(self, params, beta=1, l1_reg=0, l2_reg=0, orthogonal=0, gammas=(0, 1)):
+    def __init__(self, params, beta=1, l1_reg=0, l2_reg=0, orthogonal=0, thetas=(0, 1)):
         if not 0.0 <= l1_reg:
             raise ValueError("Invalid l1_reg value: {}".format(l1_reg))
         if not 0.0 <= l2_reg:
             raise ValueError("Invalid l2_reg value: {}".format(l2_reg))
         if not 0.0 <= orthogonal:
             raise ValueError("Invalid orthogonal value: {}".format(orthogonal))
-        if not 0.0 <= gammas[0] <= 1.0:
-            raise ValueError("Invalid gamma parameter at index 0: {}".format(gammas[0]))
-        if not 0.0 <= gammas[1] <= 1.0:
-            raise ValueError("Invalid gamma parameter at index 1: {}".format(gammas[1]))
+        if not 0.0 <= thetas[0] <= 1.0:
+            raise ValueError("Invalid gamma parameter at index 0: {}".format(thetas[0]))
+        if not 0.0 <= thetas[1] <= 1.0:
+            raise ValueError("Invalid gamma parameter at index 1: {}".format(thetas[1]))
         defaults = dict(beta=beta, l1_reg=l1_reg,
-                        l2_reg=l2_reg, orthogonal=orthogonal, gammas=gammas)
+                        l2_reg=l2_reg, orthogonal=orthogonal, thetas=thetas)
         super(BetaMu, self).__init__(params, defaults)
 
     @torch.no_grad()
