@@ -19,12 +19,12 @@ class BetaMu(Optimizer):
         l1_reg (float, optional): L1 regularize penalty. Default: ``0.``.
         l2_reg (float, optional): L2 regularize penalty (weight decay). Default: ``0.``
         orthogonal (float, optional): orthogonal regularize penalty. Default: ``0.``
-        gammas (Tuple[float, float], optional): coefficients used for weighing
+        thetas (Tuple[float, float], optional): coefficients used for weighing
             historical gradients and influence of instantaneous gradient. 
             (Default: ``(0.0, 1.0)``)
     """
 
-    def __init__(self, params, beta=1, l1_reg=0, l2_reg=0, orthogonal=0, thetas=(0, 1)):
+    def __init__(self, params, beta=1, l1_reg=0, l2_reg=0, orthogonal=0, thetas=(0,1)):
         if not 0.0 <= l1_reg:
             raise ValueError("Invalid l1_reg value: {}".format(l1_reg))
         if not 0.0 <= l2_reg:
@@ -64,6 +64,7 @@ class BetaMu(Optimizer):
             l1_reg = group['l1_reg']
             l2_reg = group['l2_reg']
             ortho = group['orthogonal']
+            thetas = group['thetas']
 
             if beta < 1:
                 gamma = 1 / (2 - beta)
@@ -114,11 +115,39 @@ class BetaMu(Optimizer):
 
                 pos.add_(eps)
                 neg.add_(eps)
-                multiplier = neg.div_(pos)
+
+                # TODO: Lazy state initialization, should init in constructor
+                state = self.state[p]
+                if len(state) == 0:
+                    state['step'] = 1
+                    state['neg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                    state['pos'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+
+                if thetas[0] > 0:
+                    neg = neg * (p ** (1/gamma))
+
+                #
+                state['neg'].add_(state['neg']*thetas[0] + neg*thetas[1])
+                state['pos'].add_(state['pos']*thetas[0] + pos*thetas[1])
+                state['step'] += 1
+
+                multiplier = state['neg'].div_(state['pos'])
                 if gamma != 1:
                     multiplier.pow_(gamma)
 
-                p.mul_(multiplier)
+                if theta[0] > 0:
+                    p.data = multiplier
+
+                    for r in range(p.shape[1]):
+                        if beta == 0:
+                            norm = (p[:,r,:] > 0).sum()
+                        else:
+                            norm = (p[:,r,:]**beta).sum()**(1/beta)
+                        p[:,r,:] = p[:,r,:].div_(norm)
+                        state['neg'][:,r,:] = state['neg'][:,r,:].div_(norm)
+                        state['pos'][:,r,:] = state['pos'][:,r,:].mul_(norm)
+                else:
+                    p.mul_(multiplier)
                 p.requires_grad = False
 
         for group in self.param_groups:
