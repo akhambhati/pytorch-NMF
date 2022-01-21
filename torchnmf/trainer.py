@@ -127,25 +127,27 @@ class BetaMu(Optimizer):
                     neg = neg * (p ** (1/gamma))
 
                 #
-                state['neg'].add_(state['neg']*thetas[0] + neg*thetas[1])
-                state['pos'].add_(state['pos']*thetas[0] + pos*thetas[1])
+                state['neg'] = state['neg']*thetas[0] + neg*thetas[1]
+                state['pos'] = state['pos']*thetas[0] + pos*thetas[1]
                 state['step'] += 1
 
-                multiplier = state['neg'].div_(state['pos'])
+                multiplier = state['neg'] / state['pos']
                 if gamma != 1:
                     multiplier.pow_(gamma)
 
-                if theta[0] > 0:
+                if thetas[0] > 0:
                     p.data = multiplier
 
+                    # TODO: Iterator should reference a rank parameter rather than
+                    # matrix shape.
                     for r in range(p.shape[1]):
                         if beta == 0:
-                            norm = (p[:,r,:] > 0).sum()
+                            norm = (p[:,r] > 0).sum()
                         else:
-                            norm = (p[:,r,:]**beta).sum()**(1/beta)
-                        p[:,r,:] = p[:,r,:].div_(norm)
-                        state['neg'][:,r,:] = state['neg'][:,r,:].div_(norm)
-                        state['pos'][:,r,:] = state['pos'][:,r,:].mul_(norm)
+                            norm = (p[:,r]**beta).sum()**(1/beta)
+                        p[:,r] = p[:,r] / norm
+                        state['neg'][:,r] = state['neg'][:,r] / norm
+                        state['pos'][:,r] = state['pos'][:,r] * norm
                 else:
                     p.mul_(multiplier)
                 p.requires_grad = False
