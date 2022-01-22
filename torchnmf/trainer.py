@@ -19,24 +19,24 @@ class BetaMu(Optimizer):
         l1_reg (float, optional): L1 regularize penalty. Default: ``0.``.
         l2_reg (float, optional): L2 regularize penalty (weight decay). Default: ``0.``
         orthogonal (float, optional): orthogonal regularize penalty. Default: ``0.``
-        thetas (Tuple[float, float], optional): coefficients used for weighing
-            historical gradients and influence of instantaneous gradient. 
-            (Default: ``(0.0, 1.0)``)
+        theta (float, optional): coefficient used for weighing relative 
+            contribution of past gradient and current gradient. (Default: ``(1.0)``)
+        n_iter (int): Number of iterations per parameter group. Default: ``1``
     """
 
-    def __init__(self, params, beta=1, l1_reg=0, l2_reg=0, orthogonal=0, thetas=(0,1)):
+    def __init__(self, params, beta=1, l1_reg=0, l2_reg=0, orthogonal=0, theta=1,  n_iter=1):
         if not 0.0 <= l1_reg:
             raise ValueError("Invalid l1_reg value: {}".format(l1_reg))
         if not 0.0 <= l2_reg:
             raise ValueError("Invalid l2_reg value: {}".format(l2_reg))
         if not 0.0 <= orthogonal:
             raise ValueError("Invalid orthogonal value: {}".format(orthogonal))
-        if not 0.0 <= thetas[0] <= 1.0:
-            raise ValueError("Invalid gamma parameter at index 0: {}".format(thetas[0]))
-        if not 0.0 <= thetas[1] <= 1.0:
-            raise ValueError("Invalid gamma parameter at index 1: {}".format(thetas[1]))
+        if not 0.0 <= theta <= 1.0:
+            raise ValueError("Invalid theta parameter value: {}".format(theta))
+        if not 1.0 <= n_iter:
+            raise ValueError("Invalid number of iterations: {}".format(n_iter))
         defaults = dict(beta=beta, l1_reg=l1_reg,
-                        l2_reg=l2_reg, orthogonal=orthogonal, thetas=thetas)
+                        l2_reg=l2_reg, orthogonal=orthogonal, theta=theta, n_iter=n_iter)
         super(BetaMu, self).__init__(params, defaults)
 
     @torch.no_grad()
@@ -65,96 +65,98 @@ class BetaMu(Optimizer):
             l1_reg = group['l1_reg']
             l2_reg = group['l2_reg']
             ortho = group['orthogonal']
-            thetas = group['thetas']
+            theta = group['theta']
+            n_iter = group['n_iter']
 
             # Iterate over model parameters within the group
             # if a gradient is not required then that parameter is "fixed"
-            for p in group['params']:
-                if not status_cache[id(p)]:
-                    continue
-                p.requires_grad = True
+            for n_i in range(n_iter):
+                for p in group['params']:
+                    if not status_cache[id(p)]:
+                        continue
+                    p.requires_grad = True
 
-                # Close the optimization loop by retrieving the
-                # observed data and prediction
-                V, WH = closure()
-                if not WH.requires_grad:
+                    # Close the optimization loop by retrieving the
+                    # observed data and prediction
+                    V, WH = closure()
+                    if not WH.requires_grad:
+                        p.requires_grad = False
+                        continue
+
+                    # Multiplicative update coefficients for beta-divergence
+                    #      Marmin, A., Goulart, J.H.D.M. and Févotte, C., 2021.
+                    #      Joint Majorization-Minimization for Nonnegative Matrix
+                    #      Factorization with the $\beta $-divergence. 
+                    #      arXiv preprint arXiv:2106.15214.
+                    if beta == 2:
+                        output_neg = V
+                        output_pos = WH
+                    elif beta == 1:
+                        output_neg = V / WH.add(eps)
+                        output_pos = torch.ones_like(WH)
+                    elif beta == 0:
+                        WH_eps = WH.add(eps)
+                        output_pos = WH_eps.reciprocal_()
+                        output_neg = output_pos.square().mul_(V)
+                    else:
+                        WH_eps = WH.add(eps)
+                        output_neg = WH_eps.pow(beta - 2).mul_(V)
+                        output_pos = WH_eps.pow_(beta - 1)
+
+                    # Numerator (negative factor) gradient
+                    WH.backward(output_neg, retain_graph=True)
+                    neg = torch.clone(p.grad).relu_()
+                    p.grad.zero_()
+
+                    # Denominator (positive factor) gradient
+                    WH.backward(output_pos)
+                    pos = torch.clone(p.grad).relu_()
+                    p.grad.add_(-neg)
+
+                    # Add regularizers to the denominator factor
+                    if l1_reg > 0:
+                        pos.add_(l1_reg)
+                    if l2_reg > 0:
+                        pos.add_(p, alpha=l2_reg)
+                    if ortho > 0:
+                        pos.add_(p.sum(1, keepdims=True) - p, alpha=ortho)
+
+                    # Avoid ill-conditioned, zero-valued multipliers
+                    pos.add_(eps)
+                    neg.add_(eps)
+
+                    # Cache the multiplicative update numerator/denominator as state
+                    # variables within the optimizer. Enables incremental learning.
+                    # TODO: Lazy state initialization, should init in constructor
+                    state = self.state[p]
+                    if len(state) == 0:
+                        state['step'] = 1
+                        state['neg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                        state['pos'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+
+                    # Accumulate gradients 
+                    state['neg'] = (1-theta)*state['neg'] + (theta)*neg
+                    state['pos'] = (1-theta)*state['pos'] + (theta)*pos
+                    state['step'] += 1
+
+                    # Compute the current state of the parameter
+                    p.mul_(state['neg'] / state['pos'])
+
+                    # If gradients are accumulated, then ensure the parameters
+                    # are normalized and the gradients are also re-scaled
+                    if theta < 1:
+
+                        # TODO: Iterator should reference a rank parameter rather than
+                        # matrix shape.
+                        for r in range(p.shape[1]):
+                            if beta == 0:
+                                norm = (p[:,r] > 0).sum()
+                            else:
+                                norm = (p[:,r]**beta).sum()**(1/beta)
+                            p[:,r] = p[:,r] / norm
+                            state['neg'][:,r] = state['neg'][:,r] / norm
+                            state['pos'][:,r] = state['pos'][:,r] * norm
                     p.requires_grad = False
-                    continue
-
-                # Multiplicative update coefficients for beta-divergence
-                #      Marmin, A., Goulart, J.H.D.M. and Févotte, C., 2021.
-                #      Joint Majorization-Minimization for Nonnegative Matrix
-                #      Factorization with the $\beta $-divergence. 
-                #      arXiv preprint arXiv:2106.15214.
-                if beta == 2:
-                    output_neg = V
-                    output_pos = WH
-                elif beta == 1:
-                    output_neg = V / WH.add(eps)
-                    output_pos = torch.ones_like(WH)
-                elif beta == 0:
-                    WH_eps = WH.add(eps)
-                    output_pos = WH_eps.reciprocal_()
-                    output_neg = output_pos.square().mul_(V)
-                else:
-                    WH_eps = WH.add(eps)
-                    output_neg = WH_eps.pow(beta - 2).mul_(V)
-                    output_pos = WH_eps.pow_(beta - 1)
-
-                # Numerator (negative factor) gradient
-                WH.backward(output_neg, retain_graph=True)
-                neg = torch.clone(p.grad).relu_()
-                p.grad.zero_()
-
-                # Denominator (positive factor) gradient
-                WH.backward(output_pos)
-                pos = torch.clone(p.grad).relu_()
-                p.grad.add_(-neg)
-
-                # Add regularizers to the denominator factor
-                if l1_reg > 0:
-                    pos.add_(l1_reg)
-                if l2_reg > 0:
-                    pos.add_(p, alpha=l2_reg)
-                if ortho > 0:
-                    pos.add_(p.sum(1, keepdims=True) - p, alpha=ortho)
-
-                # Avoid ill-conditioned, zero-valued multipliers
-                pos.add_(eps)
-                neg.add_(eps)
-
-                # Cache the multiplicative update numerator/denominator as state
-                # variables within the optimizer. Enables incremental learning.
-                # TODO: Lazy state initialization, should init in constructor
-                state = self.state[p]
-                if len(state) == 0:
-                    state['step'] = 1
-                    state['neg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
-                    state['pos'] = torch.zeros_like(p, memory_format=torch.preserve_format)
-
-                # Accumulate gradients 
-                state['neg'] = state['neg']*thetas[0] + neg*thetas[1]
-                state['pos'] = state['pos']*thetas[0] + pos*thetas[1]
-                state['step'] += 1
-
-                # Compute the current state of the parameter
-                p.data = p.data * (state['neg'] / state['pos'])
-
-                # If gradients are accumulated, then ensure the parameters
-                # are normalized and the gradients are also re-scaled
-                if thetas[0] > 0:
-
-                    # TODO: Iterator should reference a rank parameter rather than
-                    # matrix shape.
-                    for r in range(p.shape[1]):
-                        if beta == 0:
-                            norm = (p[:,r] > 0).sum()
-                        else:
-                            norm = (p[:,r]**beta).sum()**(1/beta)
-                        p[:,r] = p[:,r] / norm
-                        state['neg'][:,r] = state['neg'][:,r] / norm
-                        state['pos'][:,r] = state['pos'][:,r] * norm
-                p.requires_grad = False
 
         # Reinstate the grad status from before
         for group in self.param_groups:
