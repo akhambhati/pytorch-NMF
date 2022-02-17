@@ -776,7 +776,7 @@ class NMFD(BaseComponent):
     @staticmethod
     def reconstruct(H, W):
         pad_size = W.shape[2] - 1
-        return F.conv1d(H, W.flip(2), padding=pad_size)
+        return F.conv1d(H, W, padding=pad_size)
 
 
 class NMF2D(BaseComponent):
