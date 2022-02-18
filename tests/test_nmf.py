@@ -99,38 +99,3 @@ def test_nmf3d_invalid_construct(Vshape):
         assert True
     else:
         assert False, "Should not reach here"
-
-
-@pytest.mark.parametrize('beta', [-1, 0, 0.5, 1, 1.5, 2, 3])
-@pytest.mark.parametrize('tol', [0, 1e-4])
-@pytest.mark.parametrize('verbose', [True, False])
-@pytest.mark.parametrize('alpha', [0, 0.1])
-@pytest.mark.parametrize('l1_ratio', [0, 0.5, 1.])
-def test_fit(beta,
-             tol,
-             verbose,
-             alpha,
-             l1_ratio):
-    max_iter = 100
-    V = torch.rand(100, 50)
-    m = NMF(V.shape, 8)
-    n_iter = m.fit(V, beta, tol, max_iter, verbose, alpha, l1_ratio)
-    assert n_iter <= max_iter
-    assert not torch.any(torch.isnan(m.W))
-    assert not torch.any(torch.isnan(m.H))
-
-
-@pytest.mark.parametrize('beta', [-1, 0, 0.5,  1, 1.5, 2, 2.5])
-@pytest.mark.parametrize('verbose', [True, False])
-@pytest.mark.parametrize('sW, sH', [(None,) * 2, (0.3, None), (None, 0.3)])
-def test_sparse_fit(beta,
-                    verbose,
-                    sW,
-                    sH):
-    max_iter = 50
-    V = torch.rand(100, 50)
-    m = NMF(V.shape, 8)
-    n_iter = m.sparse_fit(V, beta, max_iter, verbose, sW, sH)
-    assert n_iter == max_iter
-    assert not torch.any(torch.isnan(m.W))
-    assert not torch.any(torch.isnan(m.H))
