@@ -1,6 +1,5 @@
 import torch
 from torch.optim.optimizer import Optimizer
-from .nmf import _proj_func, _get_norm
 from .constants import eps
 
 
@@ -178,72 +177,3 @@ class BetaMu(Optimizer):
                 p.requires_grad = status_cache[id(p)]
 
         return None
-
-
-class SparsityProj(Optimizer):
-    r"""Implements parseness constrainted gradient projection method described in `Non-negative Matrix Factorization
-    with Sparseness Constraints`_.
-
-    .. _`Non-negative Matrix Factorization with Sparseness Constraints`:
-            https://www.jmlr.org/papers/volume5/hoyer04a/hoyer04a.pdf
-
-
-    Arguments:
-        params (iterable): iterable of parameters to optimize or dicts defining
-            parameter groups
-        sparsity (float): the target sparseness for `params`, with 0 < sparsity < 1
-        dim (int, optional): dimension over which to compute the sparseness for each parameter. Default: ``1``
-        max_iter (int, optional): maximal number of function evaluations per optimization step. Default: ``10``
-    """
-
-    def __init__(self, params, sparsity, dim=1, max_iter=10):
-        if not 0.0 < sparsity < 1.:
-            raise ValueError("Invalid sparsity value: {}".format(sparsity))
-        defaults = dict(sparsity=sparsity, lr=1, dim=dim, max_iter=max_iter)
-        super(SparsityProj, self).__init__(params, defaults)
-
-    @torch.no_grad()
-    def step(self, closure):
-        """Performs a single update step.
-
-        Arguments:
-            closure (callable): a closure that reevaluates the model and returns the loss
-        """
-        loss = None
-
-        for group in self.param_groups:
-            sparsity = group['sparsity']
-            lr = group['lr']
-            dim = group['dim']
-            max_iter = group['max_iter']
-
-            with torch.enable_grad():
-                init_loss = closure()
-                init_loss.backward()
-
-            params = [(p, p.grad.clone())
-                      for p in group['params'] if p.grad is not None]
-
-            for i in range(max_iter):
-                for p, g in params:
-                    norms = _get_norm(p, dim)
-                    p.add_(g, alpha=-lr)
-                    N = p.numel() // p.shape[dim]
-                    L1 = N ** 0.5 * (1 - sparsity) + sparsity
-                    for j in range(p.shape[dim]):
-                        slicer = (slice(None),) * dim + (j,)
-                        p[slicer] = _proj_func(
-                            p[slicer], L1 * norms[j], norms[j] ** 2)
-
-                loss = closure()
-                if loss <= init_loss:
-                    break
-
-                for p, g in params:
-                    p.add_(g, alpha=lr)
-                lr *= 0.5
-
-            lr *= 1.2
-
-            group['lr'] = lr
-        return loss
