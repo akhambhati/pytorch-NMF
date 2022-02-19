@@ -1,9 +1,8 @@
 import torch
-from torch.optim.optimizer import Optimizer
+from torch.optim.optimizer import Optimizer, required
 from .constants import eps
 
-
-class BetaMu(Optimizer):
+class AdaptiveMu(Optimizer):
     r"""Implements the classic multiplicative updater for NMF models minimizing β-divergence.
 
     Note:
@@ -15,35 +14,31 @@ class BetaMu(Optimizer):
             parameter groups
         beta (float, optional): beta divergence to be minimized, measuring the distance between target and the NMF model.
                         Default: ``1.``
-        l1_reg (float, optional): L1 regularize penalty. Default: ``0.``.
-        l2_reg (float, optional): L2 regularize penalty (weight decay). Default: ``0.``
-        orthogonal (float, optional): orthogonal regularize penalty. Default: ``0.``
+        alpha (float, optional): Weight of the elastic net regularizer. Default: ``0.0``.
+        l1_ratio (float, optional): Relative L1/L2 regularization for elastic net. Default: ``0.5``.
         theta (float, optional): coefficient used for weighing relative 
             contribution of past gradient and current gradient. (Default: ``(1.0)``)
-        normalize (bool, optional): perform normalization for each component
-            after each iteration.
         update_state (bool, optional): update the historical state based on current
             gradient.
     """
 
-    def __init__(self, params, beta=1, l1_reg=0, l2_reg=0, orthogonal=0, theta=1, normalize=False, update_state=False):
-        if not 0.0 <= l1_reg:
-            raise ValueError("Invalid l1_reg value: {}".format(l1_reg))
-        if not 0.0 <= l2_reg:
-            raise ValueError("Invalid l2_reg value: {}".format(l2_reg))
-        if not 0.0 <= orthogonal:
-            raise ValueError("Invalid orthogonal value: {}".format(orthogonal))
+    def __init__(self, params, beta=1, alpha=0, l1_ratio=0.5, theta=1, update_state=False):
+        if not 0.0 <= alpha:
+            raise ValueError("Invalid alpha value: {}".format(alpha))
+        if not 0.0 <= l1_ratio <= 1:
+            raise ValueError("Invalid l1_ratio value: {}".format(l1_ratio))
         if not 0.0 <= theta <= 1.0:
             raise ValueError("Invalid theta parameter value: {}".format(theta))
-        if not normalize in [True, False]:
-            raise ValueError("Invalid normalize parameter value: {}".format(normalize))
         if not update_state in [True, False]:
-            raise ValueError("Invalid update_state parameter value: {}".format(normalize))
+            raise ValueError("Invalid update_state parameter value: {}".format(update_state))
 
-        defaults = dict(beta=beta, l1_reg=l1_reg,
-                        l2_reg=l2_reg, orthogonal=orthogonal, theta=theta,
-                        normalize=normalize, update_state=update_state)
-        super(BetaMu, self).__init__(params, defaults)
+        defaults = dict(
+                beta=beta,
+                alpha=alpha,
+                l1_ratio=l1_ratio,
+                theta=theta,
+                update_state=update_state)
+        super(AdaptiveMu, self).__init__(params, defaults)
 
     @torch.no_grad()
     def step(self, closure):
@@ -68,11 +63,9 @@ class BetaMu(Optimizer):
         # Iterate over each parameter group (specifies order of optimization)
         for group in self.param_groups:
             beta = group['beta']
-            l1_reg = group['l1_reg']
-            l2_reg = group['l2_reg']
-            ortho = group['orthogonal']
+            alpha = group['alpha']
+            l1_ratio = group['l1_ratio']
             theta = group['theta']
-            normalize = group['normalize']
             update_state = group['update_state']
 
             # TODO: Warn that if theta < 1 and update_state is False that the
@@ -122,13 +115,9 @@ class BetaMu(Optimizer):
                 pos = torch.clone(p.grad).relu_()
                 p.grad.add_(-neg)
 
-                # Add regularizers to the denominator factor
-                if l1_reg > 0:
-                    pos.add_(l1_reg)
-                if l2_reg > 0:
-                    pos.add_(p, alpha=l2_reg)
-                if ortho > 0:
-                    pos.add_(p.sum(1, keepdims=True) - p, alpha=ortho)
+                # Add elastic_net regularizers to the denominator factor
+                pos.add_(alpha*(l1_ratio))
+                pos.add_(p, alpha=(alpha*(1-l1_ratio)))
 
                 # Cache the multiplicative update numerator/denominator as state
                 # variables within the optimizer. Enables incremental learning.
