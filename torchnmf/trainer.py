@@ -18,26 +18,21 @@ class AdaptiveMu(Optimizer):
         l1_ratio (float, optional): Relative L1/L2 regularization for elastic net. Default: ``0.5``.
         theta (float, optional): coefficient used for weighing relative 
             contribution of past gradient and current gradient. (Default: ``(1.0)``)
-        update_state (bool, optional): update the historical state based on current
-            gradient.
     """
 
-    def __init__(self, params, beta=1, alpha=0, l1_ratio=0.5, theta=1, update_state=False):
+    def __init__(self, params, beta=1, alpha=0, l1_ratio=0.5, theta=1):
         if not 0.0 <= alpha:
             raise ValueError("Invalid alpha value: {}".format(alpha))
         if not 0.0 <= l1_ratio <= 1:
             raise ValueError("Invalid l1_ratio value: {}".format(l1_ratio))
         if not 0.0 <= theta <= 1.0:
             raise ValueError("Invalid theta parameter value: {}".format(theta))
-        if not update_state in [True, False]:
-            raise ValueError("Invalid update_state parameter value: {}".format(update_state))
 
         defaults = dict(
                 beta=beta,
                 alpha=alpha,
                 l1_ratio=l1_ratio,
-                theta=theta,
-                update_state=update_state)
+                theta=theta)
         super(AdaptiveMu, self).__init__(params, defaults)
 
     @torch.no_grad()
@@ -66,10 +61,6 @@ class AdaptiveMu(Optimizer):
             alpha = group['alpha']
             l1_ratio = group['l1_ratio']
             theta = group['theta']
-            update_state = group['update_state']
-
-            # TODO: Warn that if theta < 1 and update_state is False that the
-            # gradients will not incorporate previous state information.
 
             # Iterate over model parameters within the group
             # if a gradient is not required then that parameter is "fixed"
@@ -84,6 +75,17 @@ class AdaptiveMu(Optimizer):
                 if not WH.requires_grad:
                     p.requires_grad = False
                     continue
+
+                # Initialize the state variables for gradient averaging.
+                # Enables incremental learning.
+                # TODO: Lazy state initialization, should init in constructor
+                state = self.state[p]
+                if len(state) == 0:
+                    state['step'] = 0
+                    state['neg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                    state['pos'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                neg, pos = state['neg'], state['pos']
+                state['step'] += 1
 
                 # Multiplicative update coefficients for beta-divergence
                 #      Marmin, A., Goulart, J.H.D.M. and Févotte, C., 2021.
@@ -107,56 +109,28 @@ class AdaptiveMu(Optimizer):
 
                 # Numerator (negative factor) gradient
                 WH.backward(output_neg, retain_graph=True)
-                neg = torch.clone(p.grad).relu_()
+                _neg = torch.clone(p.grad).relu_()
                 p.grad.zero_()
 
                 # Denominator (positive factor) gradient
                 WH.backward(output_pos)
-                pos = torch.clone(p.grad).relu_()
-                p.grad.add_(-neg)
+                _pos = torch.clone(p.grad).relu_()
+                p.grad.zero_()
 
                 # Add elastic_net regularizers to the denominator factor
-                pos.add_(alpha*(l1_ratio))
-                pos.add_(p, alpha=(alpha*(1-l1_ratio)))
-
-                # Cache the multiplicative update numerator/denominator as state
-                # variables within the optimizer. Enables incremental learning.
-                # TODO: Lazy state initialization, should init in constructor
-                state = self.state[p]
-                if len(state) == 0:
-                    state['step'] = 1
-                    state['neg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
-                    state['pos'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                _pos.add_(alpha*(l1_ratio))
+                _pos.add_(p, alpha=(alpha*(1-l1_ratio)))
 
                 # Accumulate gradients 
-                neg = (1-theta)*state['neg'] + (theta)*neg
-                pos = (1-theta)*state['pos'] + (theta)*pos
+                neg.mul_(1-theta).add_(_neg.mul_(theta))
+                pos.mul_(1-theta).add_(_pos.mul_(theta))
 
                 # Avoid ill-conditioned, zero-valued multipliers
-                pos.add_(eps)
                 neg.add_(eps)
+                pos.add_(eps)
 
                 # Compute the current state of the parameter
-                p.mul_(neg / pos)
-
-                # If normalize then rescale based on beta-divgerence
-                if normalize:
-
-                    # TODO: Iterator should reference a rank parameter rather than
-                    # matrix shape.
-                    for r in range(p.shape[1]):
-                        if beta == 0:
-                            norm = (p[:,r] > 0).sum()
-                        else:
-                            norm = (p[:,r]**beta).sum()**(1/beta)
-                        p[:,r] = p[:,r] / norm
-                        neg[:, r] = neg[:, r] / norm
-                        pos[:, r] = pos[:, r] * norm
-
-                if update_state:
-                    state['neg'] = neg
-                    state['pos'] = pos
-                    state['step'] += 1
+                p.mul_(neg.div(pos))
 
                 p.requires_grad = False
 
