@@ -8,10 +8,10 @@ from torchnmf.metrics import beta_div
 
 
 @pytest.mark.parametrize('beta', [-1, 0, 0.5, 1, 1.5, 2, 3])
-@pytest.mark.parametrize('l1_reg', [0, 1e-3])
-@pytest.mark.parametrize('l2_reg', [0, 1e-3])
-@pytest.mark.parametrize('orthogonal', [0, 1e-2])
-def test_beta_trainer(beta, l1_reg, l2_reg, orthogonal):
+@pytest.mark.parametrize('alpha', [0, 1e-3])
+@pytest.mark.parametrize('l1_ratio', [0, 0.5, 1])
+@pytest.mark.parametrize('theta', [0, 0.5, 1])
+def test_beta_trainer(beta, alpha, l1_ratio, theta):
     m = nn.Sequential(
         NMF((100, 16), rank=8),
         NMF(W=(32, 16)),
@@ -19,7 +19,7 @@ def test_beta_trainer(beta, l1_reg, l2_reg, orthogonal):
     )
 
     target = torch.rand(100, 50)
-    trainer = BetaMu(m.parameters(), beta, l1_reg, l2_reg, orthogonal)
+    trainer = AdaptiveMu(m.parameters(), beta, alpha, l1_ratio, theta)
 
     def closure():
         trainer.zero_grad()
@@ -30,44 +30,3 @@ def test_beta_trainer(beta, l1_reg, l2_reg, orthogonal):
         for p in m.parameters():
             assert torch.all(p >= 0.)
     return
-
-
-@pytest.mark.parametrize('attr', ['W', 'H'])
-def test_sparse_trainer(attr):
-    m = NMF((100, 50))
-
-    target = torch.rand(100, 50)
-    trainer = SparsityProj([getattr(m, attr)], 0.2)
-
-    def closure():
-        trainer.zero_grad()
-        output = m(None)
-        loss = beta_div(output, target)
-        return loss
-
-    for _ in range(10):
-        trainer.step(closure)
-        assert torch.all(getattr(m, attr) >= 0.)
-    return
-
-
-@pytest.mark.parametrize('beta', [-1, 0, 0.5, 1, 1.5, 2, 3])
-@pytest.mark.parametrize('attr', ['W', 'H'])
-def test_beta_trainer_grad(beta, attr):
-    m1 = NMF((100, 50))
-    m2 = NMF((100, 50))
-    m2.load_state_dict(m1.state_dict())
-
-    target = torch.rand(100, 50)
-
-    trainer = BetaMu([getattr(m1, attr)], beta)
-
-    def closure():
-        trainer.zero_grad()
-        return target, m1()
-    trainer.step(closure)
-
-    loss = beta_div(m2(), target, beta)
-    loss.backward()
-
-    assert torch.allclose(getattr(m1, attr).grad, getattr(m2, attr).grad)
