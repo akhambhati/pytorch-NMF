@@ -115,7 +115,7 @@ class AdaptiveMu(Optimizer):
                 # Denominator (positive factor) gradient
                 WH.backward(output_pos)
                 _pos = torch.clone(p.grad).relu_()
-                p.grad.zero_()
+                p.grad.add_(-_neg)
 
                 # Add elastic_net regularizers to the denominator factor
                 _pos.add_(alpha*(l1_ratio))
