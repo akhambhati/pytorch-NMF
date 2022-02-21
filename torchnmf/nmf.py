@@ -14,7 +14,8 @@ _size_2_t = Union[int, Tuple[int, int]]
 _size_3_t = Union[int, Tuple[int, int, int]]
 
 __all__ = [
-    'BaseComponent', 'NMF', 'NMFD', 'NMF2D', 'NMF3D'
+    'BaseComponent', 'NMF', 'NMFD', 'NMF2D', 'NMF3D',
+    'BaseNoise', 'AdditiveNoise', 'MultiplicativeNoise'
 ]
 
 
@@ -138,6 +139,7 @@ class BaseComponent(torch.nn.Module):
             Should be overridden by all subclasses.
             """
         raise NotImplementedError
+
 
 class NMF(BaseComponent):
     r"""Non-Negative Matrix Factorization (NMF).
@@ -437,3 +439,110 @@ class NMF3D(BaseComponent):
         pad_size = (W.shape[2] - 1, W.shape[3] - 1, W.shape[4] - 1)
         out = F.conv3d(H, W.flip((2, 3, 4)), padding=pad_size)
         return out
+
+
+class BaseNoise(torch.nn.Module):
+    r"""Base class for all Noise modules.
+
+    You can't use this module directly.
+    Your models should also subclass this class.
+
+    Args:
+        R (tuple or Tensor): size or initial weights of noise tensor W
+        trainable_R (bool):  controls whether noise tensor R is trainable when initial weights is given. Default: ``True``
+
+    Attributes:
+        R (Tensor or None): the template tensor of the module if corresponding argument is given.
+            If size is given, values are initialized non-negatively.
+
+       """
+    __annotations__ = {'R': Optional[Tensor]}
+
+    R: Optional[Tensor]
+
+    def __init__(self,
+                 R: Union[Iterable[int], Tensor] = None,
+                 trainable_R: bool = True):
+        super().__init__()
+
+        if isinstance(R, Tensor):
+            assert torch.all(R >= 0.), "Tensor W should be non-negative."
+            self.register_parameter('R', Parameter(
+                torch.empty(*R.size()), requires_grad=trainable_R))
+            self.R.data.copy_(R)
+        elif isinstance(R, Iterabc):
+            self.register_parameter('R', Parameter(torch.randn(*R).abs()))
+        else:
+            self.register_parameter('R', None)
+
+    def forward(self, X: Tensor, R: Tensor = None) -> Tensor:
+        r"""An outer wrapper of :meth:`self.reconstruct(X) <torchnmf.nmf.BaseComponent.reconstruct>`.
+
+        .. note::
+                Should call the :class:`BaseComponent` instance afterwards
+                instead of this since the former takes care of running the
+                registered hooks while the latter silently ignores them.
+
+        Args:
+            X(Tensor): input data tensor X.
+            R(Tensor, optional): input outlier tensor R.
+
+        Returns:
+            Tensor: tensor
+        """
+        if R is None:
+            R = self.R
+        assert R is not None
+        return self.reconstruct(X, R)
+
+    @staticmethod
+    def reconstruct(X: Tensor, R: Tensor) -> Tensor:
+        r"""Defines the computation performed at every call.
+
+            Should be overridden by all subclasses.
+            """
+        raise NotImplementedError
+
+
+class AdditiveNoise(BaseNoise):
+    r"""Additive Noise Model
+
+    Find a noise model "R" that satisfies: :math: `X = X_HAT + R`.
+
+    Args:
+        Vshape (tuple, optional): size of target matrix V
+    """
+
+    def __init__(self,
+                 Vshape: Iterable[int] = None,
+                 **kwargs):
+        if isinstance(Vshape, Iterabc):
+            kwargs['R'] = Vshape
+
+        super().__init__(**kwargs)
+
+    @staticmethod
+    def reconstruct(X, R):
+        return X.add(R)
+
+
+class MultiplicativeNoise(BaseNoise):
+    r"""Multiplicative Noise Model
+
+    Find a noise model "R" that satisfies: :math: `X = X_HAT x R`.
+
+    Args:
+        Vshape (tuple, optional): size of target matrix V
+    """
+
+    def __init__(self,
+                 Vshape: Iterable[int] = None,
+                 **kwargs):
+        if isinstance(Vshape, Iterabc):
+            kwargs['R'] = Vshape
+
+        super().__init__(**kwargs)
+
+    @staticmethod
+    def reconstruct(X, R):
+        return X.mul(R)
