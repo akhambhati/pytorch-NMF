@@ -99,3 +99,15 @@ def test_nmf3d_invalid_construct(Vshape):
         assert True
     else:
         assert False, "Should not reach here"
+
+
+@pytest.mark.parametrize('R', [(50, 8), torch.rand(50, 8), None])
+def test_basenoise_valid_construct(R):
+    m = BaseNoise(R)
+    if R is None:
+        assert m.R is None
+
+
+def test_additivenoise_valid_construct():
+    m = AdditiveNoise((100, 50))
+    assert m.R.shape == (100, 50)
