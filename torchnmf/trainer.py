@@ -2,6 +2,7 @@ import torch
 from torch.optim.optimizer import Optimizer, required
 from .constants import eps
 
+
 class AdaptiveMu(Optimizer):
     r"""Implements the classic multiplicative updater for NMF models minimizing β-divergence.
 
@@ -20,7 +21,7 @@ class AdaptiveMu(Optimizer):
             contribution of past gradient and current gradient. (Default: ``(1.0)``)
     """
 
-    def __init__(self, params, beta=1, alpha=0, l1_ratio=0.5, theta=1):
+    def __init__(self, params, alpha=0, l1_ratio=0.5, theta=1):
         if not 0.0 <= alpha:
             raise ValueError("Invalid alpha value: {}".format(alpha))
         if not 0.0 <= l1_ratio <= 1:
@@ -29,10 +30,10 @@ class AdaptiveMu(Optimizer):
             raise ValueError("Invalid theta parameter value: {}".format(theta))
 
         defaults = dict(
-                beta=beta,
                 alpha=alpha,
                 l1_ratio=l1_ratio,
-                theta=theta)
+                theta=theta
+                )
         super(AdaptiveMu, self).__init__(params, defaults)
 
     @torch.no_grad()
@@ -55,26 +56,71 @@ class AdaptiveMu(Optimizer):
                 status_cache[id(p)] = p.requires_grad
                 p.requires_grad = False
 
+        ### FIRST PASS -- Accumulate Positive/Negative Gradient Contributions
         # Iterate over each parameter group (specifies order of optimization)
         for group in self.param_groups:
-            beta = group['beta']
             alpha = group['alpha']
             l1_ratio = group['l1_ratio']
             theta = group['theta']
 
             # Iterate over model parameters within the group
             # if a gradient is not required then that parameter is "fixed"
+            _neg, _pos = None, None
             for p in group['params']:
                 if not status_cache[id(p)]:
                     continue
                 p.requires_grad = True
 
+                # Initialize temporary gradient components
+                _neg = torch.zeros_like(p)
+                _pos = torch.zeros_like(p)
+
                 # Close the optimization loop by retrieving the
                 # observed data and prediction
-                V, WH = closure()
-                if not WH.requires_grad:
-                    p.requires_grad = False
-                    continue
+                loss_fns = closure()[id(p)]
+                for loss_fn in loss_fns:
+                    loss_fn = torch.enable_grad()(loss_fn)
+                    V, WH, beta = loss_fn()
+                    if not WH.requires_grad:
+                        continue
+
+                    # Multiplicative update coefficients for beta-divergence
+                    #      Marmin, A., Goulart, J.H.D.M. and Févotte, C., 2021.
+                    #      Joint Majorization-Minimization for Nonnegative Matrix
+                    #      Factorization with the $\beta $-divergence. 
+                    #      arXiv preprint arXiv:2106.15214.
+                    if beta == 2:
+                        output_neg = V
+                        output_pos = WH
+                    elif beta == 1:
+                        output_neg = V / WH.add(eps)
+                        output_pos = torch.ones_like(WH)
+                    elif beta == 0:
+                        WH_eps = WH.add(eps)
+                        output_pos = WH_eps.reciprocal_()
+                        output_neg = output_pos.square().mul_(V)
+                    else:
+                        WH_eps = WH.add(eps)
+                        output_neg = WH_eps.pow(beta - 2).mul_(V)
+                        output_pos = WH_eps.pow_(beta - 1)
+
+                    # Numerator (negative factor) gradient
+                    # Retain graph so that backward can be run again using the 
+                    # positive component.
+                    WH.backward(output_neg, retain_graph=True)
+                    _neg.add_(torch.clone(p.grad).relu_())
+                    p.grad.zero_()
+
+                    # Denominator (positive factor) gradient
+                    # The parameter gradient holds both components (positive - negative)
+                    WH.backward(output_pos)
+                    _pos.add_(torch.clone(p.grad).relu_())
+                    #p.grad.add_(-_neg)
+                    p.grad.zero_()
+
+                # Add elastic_net regularizers to the denominator factor
+                _pos.add_(alpha*(l1_ratio))
+                _pos.add_(p, alpha=(alpha*(1-l1_ratio)))
 
                 # Initialize the state variables for gradient averaging.
                 # Enables incremental learning.
@@ -87,51 +133,14 @@ class AdaptiveMu(Optimizer):
                 neg, pos = state['neg'], state['pos']
                 state['step'] += 1
 
-                # Multiplicative update coefficients for beta-divergence
-                #      Marmin, A., Goulart, J.H.D.M. and Févotte, C., 2021.
-                #      Joint Majorization-Minimization for Nonnegative Matrix
-                #      Factorization with the $\beta $-divergence. 
-                #      arXiv preprint arXiv:2106.15214.
-                if beta == 2:
-                    output_neg = V
-                    output_pos = WH
-                elif beta == 1:
-                    output_neg = V / WH.add(eps)
-                    output_pos = torch.ones_like(WH)
-                elif beta == 0:
-                    WH_eps = WH.add(eps)
-                    output_pos = WH_eps.reciprocal_()
-                    output_neg = output_pos.square().mul_(V)
-                else:
-                    WH_eps = WH.add(eps)
-                    output_neg = WH_eps.pow(beta - 2).mul_(V)
-                    output_pos = WH_eps.pow_(beta - 1)
-
-                # Numerator (negative factor) gradient
-                WH.backward(output_neg, retain_graph=True)
-                _neg = torch.clone(p.grad).relu_()
-                p.grad.zero_()
-
-                # Denominator (positive factor) gradient
-                WH.backward(output_pos)
-                _pos = torch.clone(p.grad).relu_()
-                p.grad.add_(-_neg)
-
-                # Add elastic_net regularizers to the denominator factor
-                _pos.add_(alpha*(l1_ratio))
-                _pos.add_(p, alpha=(alpha*(1-l1_ratio)))
-
                 # Accumulate gradients 
                 neg.mul_(1-theta).add_(_neg.mul_(theta))
                 pos.mul_(1-theta).add_(_pos.mul_(theta))
 
-                # Avoid ill-conditioned, zero-valued multipliers
-                neg.add_(eps)
-                pos.add_(eps)
-
-                # Compute the current state of the parameter
+                # Multiplicative Update
                 p.mul_(neg.div(pos))
 
+                # Force the gradient requirement to off
                 p.requires_grad = False
 
         # Reinstate the grad status from before
