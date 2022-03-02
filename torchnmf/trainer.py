@@ -137,6 +137,10 @@ class AdaptiveMu(Optimizer):
                 neg.mul_(1-theta).add_(_neg.mul_(theta))
                 pos.mul_(1-theta).add_(_pos.mul_(theta))
 
+                # Avoid ill-conditioned, zero-valued multipliers
+                neg.add_(eps)
+                pos.add_(eps)
+
                 # Multiplicative Update
                 p.mul_(neg.div(pos))
 
