@@ -21,18 +21,21 @@ class AdaptiveMu(Optimizer):
             contribution of past gradient and current gradient. (Default: ``(1.0)``)
     """
 
-    def __init__(self, params, alpha=0, l1_ratio=0.5, theta=1):
+    def __init__(self, params, alpha=0, l1_ratio=0.5, theta=1, ortho=0):
         if not 0.0 <= alpha:
             raise ValueError("Invalid alpha value: {}".format(alpha))
         if not 0.0 <= l1_ratio <= 1:
             raise ValueError("Invalid l1_ratio value: {}".format(l1_ratio))
         if not 0.0 <= theta <= 1.0:
             raise ValueError("Invalid theta parameter value: {}".format(theta))
+        if not 0.0 <= ortho:
+            raise ValueError("Invalid orthogonality parameter value: {}".format(ortho))
 
         defaults = dict(
                 alpha=alpha,
                 l1_ratio=l1_ratio,
-                theta=theta
+                theta=theta,
+                ortho=ortho
                 )
         super(AdaptiveMu, self).__init__(params, defaults)
 
@@ -62,6 +65,7 @@ class AdaptiveMu(Optimizer):
             alpha = group['alpha']
             l1_ratio = group['l1_ratio']
             theta = group['theta']
+            ortho = group['ortho']
 
             # Iterate over model parameters within the group
             # if a gradient is not required then that parameter is "fixed"
@@ -80,7 +84,7 @@ class AdaptiveMu(Optimizer):
                 loss_fns = closure()[id(p)]
                 for loss_fn in loss_fns:
                     loss_fn = torch.enable_grad()(loss_fn)
-                    V, WH, beta = loss_fn()
+                    V, WH, beta, lam = loss_fn()
                     if not WH.requires_grad:
                         continue
 
@@ -108,19 +112,25 @@ class AdaptiveMu(Optimizer):
                     # Retain graph so that backward can be run again using the 
                     # positive component.
                     WH.backward(output_neg, retain_graph=True)
-                    _neg.add_(torch.clone(p.grad).relu_())
+                    __neg = (torch.clone(p.grad).relu_())
                     p.grad.zero_()
 
                     # Denominator (positive factor) gradient
                     # The parameter gradient holds both components (positive - negative)
                     WH.backward(output_pos)
-                    _pos.add_(torch.clone(p.grad).relu_())
+                    __pos = (torch.clone(p.grad).relu_())
                     #p.grad.add_(-_neg)
                     p.grad.zero_()
+
+                    # Include regularizer
+                    _neg.add_(__neg, alpha=lam)
+                    _pos.add_(__pos, alpha=lam)
 
                 # Add elastic_net regularizers to the denominator factor
                 _pos.add_(alpha*(l1_ratio))
                 _pos.add_(p, alpha=(alpha*(1-l1_ratio)))
+
+                _pos.add_(p.sum(1, keepdims=True) - p, alpha=ortho)
 
                 # Initialize the state variables for gradient averaging.
                 # Enables incremental learning.
