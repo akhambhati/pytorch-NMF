@@ -13,34 +13,21 @@ class AdaptiveMu(Optimizer):
     Arguments:
         params (iterable): iterable of parameters to optimize or dicts defining
             parameter groups
-        beta (float, optional): beta divergence to be minimized, measuring the distance between target and the NMF model.
-                        Default: ``1.``
-        alpha (float, optional): Weight of the elastic net regularizer. Default: ``0.0``.
-        l1_ratio (float, optional): Relative L1/L2 regularization for elastic net. Default: ``0.5``.
         theta (float, optional): coefficient used for weighing relative 
             contribution of past gradient and current gradient. (Default: ``(1.0)``)
     """
 
-    def __init__(self, params, alpha=0, l1_ratio=0.5, theta=1, ortho=0):
-        if not 0.0 <= alpha:
-            raise ValueError("Invalid alpha value: {}".format(alpha))
-        if not 0.0 <= l1_ratio <= 1:
-            raise ValueError("Invalid l1_ratio value: {}".format(l1_ratio))
+    def __init__(self, params, theta=1):
         if not 0.0 <= theta <= 1.0:
             raise ValueError("Invalid theta parameter value: {}".format(theta))
-        if not 0.0 <= ortho:
-            raise ValueError("Invalid orthogonality parameter value: {}".format(ortho))
 
         defaults = dict(
-                alpha=alpha,
-                l1_ratio=l1_ratio,
                 theta=theta,
-                ortho=ortho
                 )
         super(AdaptiveMu, self).__init__(params, defaults)
 
     @torch.no_grad()
-    def step(self, closure):
+    def step(self, closure, freeze=None):
         """Performs a single update step.
 
         Arguments:
@@ -62,10 +49,7 @@ class AdaptiveMu(Optimizer):
         ### FIRST PASS -- Accumulate Positive/Negative Gradient Contributions
         # Iterate over each parameter group (specifies order of optimization)
         for group in self.param_groups:
-            alpha = group['alpha']
-            l1_ratio = group['l1_ratio']
             theta = group['theta']
-            ortho = group['ortho']
 
             # Iterate over model parameters within the group
             # if a gradient is not required then that parameter is "fixed"
@@ -83,8 +67,8 @@ class AdaptiveMu(Optimizer):
                 # observed data and prediction
                 loss_fns = closure()[id(p)]
                 for loss_fn in loss_fns:
-                    loss_fn = torch.enable_grad()(loss_fn)
-                    V, WH, beta, lam = loss_fn()
+                    with torch.enable_grad():
+                        V, WH, beta, penalty = loss_fn
                     if not WH.requires_grad:
                         continue
 
@@ -122,15 +106,12 @@ class AdaptiveMu(Optimizer):
                     #p.grad.add_(-_neg)
                     p.grad.zero_()
 
-                    # Include regularizer
-                    _neg.add_(__neg, alpha=lam)
-                    _pos.add_(__pos, alpha=lam)
+                    # Include penalty
+                    __pos.add_(penalty)
 
-                # Add elastic_net regularizers to the denominator factor
-                _pos.add_(alpha*(l1_ratio))
-                _pos.add_(p, alpha=(alpha*(1-l1_ratio)))
-
-                _pos.add_(p.sum(1, keepdims=True) - p, alpha=ortho)
+                    # Add to the running estimate
+                    _neg.add_(__neg)
+                    _pos.add_(__pos)
 
                 # Initialize the state variables for gradient averaging.
                 # Enables incremental learning.
@@ -152,7 +133,13 @@ class AdaptiveMu(Optimizer):
                 pos.add_(eps)
 
                 # Multiplicative Update
-                p.mul_(neg.div(pos))
+                multiplier = neg.div(pos)
+                if not (freeze is None):
+                    if freeze.shape == p.shape:
+                        multiplier[freeze] = 1
+                    else:
+                        print('freeze matrix is of incompatible size.')
+                p.mul_(multiplier)
 
                 # Force the gradient requirement to off
                 p.requires_grad = False
