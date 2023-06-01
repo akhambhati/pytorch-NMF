@@ -40,7 +40,7 @@ class AdaptiveMu(Optimizer):
         super(AdaptiveMu, self).__init__(params, defaults)
 
     @torch.no_grad()
-    def step(self, closure, freeze=None):
+    def step(self, closure):
         """Performs a single update step.
 
         Arguments:
@@ -62,12 +62,11 @@ class AdaptiveMu(Optimizer):
         ### FIRST PASS -- Accumulate Positive/Negative Gradient Contributions
         # Iterate over each parameter group (specifies order of optimization)
         for group in self.param_groups:
-            theta = group['theta']
 
             # Iterate over model parameters within the group
             # if a gradient is not required then that parameter is "fixed"
             _neg, _pos = None, None
-            for p in group['params']:
+            for p, th in zip(group['params'], group['theta']):
                 if not status_cache[id(p)]:
                     continue
                 p.requires_grad = True
@@ -137,7 +136,8 @@ class AdaptiveMu(Optimizer):
                 neg, pos = state['neg'], state['pos']
                 state['step'] += 1
 
-                # Accumulate gradients 
+                # Accumulate gradients
+                theta = torch.Tensor(th.reshape(1, len(th), 1))
                 neg.mul_(1-theta).add_(_neg.mul_(theta))
                 pos.mul_(1-theta).add_(_pos.mul_(theta))
 
@@ -147,11 +147,6 @@ class AdaptiveMu(Optimizer):
 
                 # Multiplicative Update
                 multiplier = neg.div(pos)
-                if not (freeze is None):
-                    if freeze.shape == p.shape:
-                        multiplier[freeze] = 1
-                    else:
-                        print('freeze matrix is of incompatible size.')
                 p.mul_(multiplier)
 
                 # Force the gradient requirement to off
