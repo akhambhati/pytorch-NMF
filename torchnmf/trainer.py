@@ -3,12 +3,6 @@ from torch.optim.optimizer import Optimizer, required
 from .constants import eps
 
 
-AdaptiveMu([{
-            'params': [seqnmf_model.cnmf.W],
-            'theta': motif_lr
-        }])
-
-
 class AdaptiveMu(Optimizer):
     r"""Implements the classic multiplicative updater for NMF models minimizing β-divergence.
 
