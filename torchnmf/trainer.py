@@ -32,7 +32,7 @@ class AdaptiveMu(Optimizer):
                 raise ValueError('Rank of parameters must equal number of learning rate.')
             for t in th:
                 if not 0.0 <= t <= 1.0:
-            raise ValueError("Theta should be bounded between 0 and 1")
+                    raise ValueError("Theta should be bounded between 0 and 1")
 
         defaults = dict(
                 theta=theta,
