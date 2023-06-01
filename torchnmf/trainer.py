@@ -3,6 +3,12 @@ from torch.optim.optimizer import Optimizer, required
 from .constants import eps
 
 
+AdaptiveMu([{
+            'params': [seqnmf_model.cnmf.W],
+            'theta': motif_lr
+        }])
+
+
 class AdaptiveMu(Optimizer):
     r"""Implements the classic multiplicative updater for NMF models minimizing β-divergence.
 
@@ -17,9 +23,16 @@ class AdaptiveMu(Optimizer):
             contribution of past gradient and current gradient. (Default: ``(1.0)``)
     """
 
-    def __init__(self, params, theta=1):
-        if not 0.0 <= theta <= 1.0:
-            raise ValueError("Invalid theta parameter value: {}".format(theta))
+    def __init__(self, params, theta):
+        if len(params) != len(theta):
+            raise ValueError('Length of parameter groups not equal to the length theta')
+
+        for par, th in zip(params, theta):
+            if par.shape[1] != th.shape[-1]:
+                raise ValueError('Rank of parameters must equal number of learning rate.')
+            for t in th:
+                if not 0.0 <= t <= 1.0:
+            raise ValueError("Theta should be bounded between 0 and 1")
 
         defaults = dict(
                 theta=theta,
