@@ -18,6 +18,7 @@ class AdaptiveMu(Optimizer):
     """
 
     def __init__(self, params, theta):
+        """
         if len(params) != len(theta):
             raise ValueError('Length of parameter groups not equal to the length theta')
 
@@ -27,7 +28,7 @@ class AdaptiveMu(Optimizer):
             for t in th:
                 if not 0.0 <= t <= 1.0:
                     raise ValueError("Theta should be bounded between 0 and 1")
-
+        """
         defaults = dict(
                 theta=theta,
                 )
