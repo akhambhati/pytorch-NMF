@@ -132,7 +132,7 @@ class AdaptiveMu(Optimizer):
                 state['step'] += 1
 
                 # Accumulate gradients
-                theta = torch.Tensor(th.reshape(1, len(th), 1))
+                theta = torch.Tensor(th)
                 neg.mul_(1-theta).add_(_neg.mul_(theta))
                 pos.mul_(1-theta).add_(_pos.mul_(theta))
 

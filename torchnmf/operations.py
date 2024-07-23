@@ -5,8 +5,11 @@ Some of these functions were ported with minor modifications
 from the tensorly package, https://tensorly.github.io/, distributed
 under a BSD clause 3 license.
 """
-import numpy as np
 
+import numpy as np
+import torch
+
+ein_chr_init = ord('a')
 
 def unfold(tensor, mode):
     """Returns the mode-`mode` unfolding of `tensor`.
@@ -25,11 +28,12 @@ def unfold(tensor, mode):
     ------
     Jean Kossaifi <https://github.com/tensorly>
     """
-    return np.moveaxis(tensor, mode, 0).reshape((tensor.shape[mode], -1))
+    return torch.reshape(torch.moveaxis(tensor, mode, 0), (tensor.shape[mode], -1))
 
 def ein_outer(n_modes):
-    chars = [chr(97+i) for i in range(n_modes)]
-    estr = '...,'.join(chars)+'...'+'->'+''.join(chars)
+    char_ind = [chr(ein_chr_init+i) for i in range(n_modes)]
+    char_shr = chr(ein_chr_init+n_modes) 
+    estr = ','.join([c + char_shr for c in char_ind])+'->'+''.join(char_ind+[char_shr])
     return estr
 
 def outer_prod(matrices):
