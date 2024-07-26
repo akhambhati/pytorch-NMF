@@ -29,11 +29,13 @@ class NTF(nn.Module):
     def forward(self):
         return outer_prod(self.modes).sum(axis=-1)
 
-    def subnmf_loss(self, mode, X, beta):
+    def subnmf_loss(self, mode, X, beta, io_dict=None):
         X_unfold = unfold(X, mode)
         Xh_unfold = unfold(self.forward(), mode)
 
-        io_dict = {}
+        if io_dict is None:
+            io_dict = {}
+
         for pn, p in self.subnmf[mode].named_parameters():
             if id(p) not in io_dict:
                 io_dict[id(p)] = list()
@@ -64,6 +66,7 @@ class NTFTrainer():
         self.subnmf_trainers = [AdaptiveMu(
             params=[self.ntf_model.subnmf[m].W],
             theta=[self.modes_lr[m]]) for m in range(ntf_model.nmodes)]
+        self.trainable_modes = [*range(self.ntf_model.nmodes)] 
 
     def train_W(self, signal, mode, reinit=True, n_iter=1):
         with torch.no_grad():
@@ -80,7 +83,7 @@ class NTFTrainer():
             self.subnmf_trainers[mode].step(closure)
 
     def model_online_update_and_filter(self, signal, n_iter):
-        for mode in range(self.ntf_model.nmodes):
+        for mode in self.trainable_modes:
             with torch.no_grad():
                 self.ntf_model.update_subnmf_kr()
             self.train_W(signal, mode, reinit=False, n_iter=n_iter)

@@ -64,6 +64,7 @@ class AdaptiveMu(Optimizer):
             for p, th in zip(group['params'], group['theta']):
                 if not status_cache[id(p)]:
                     continue
+                self.zero_grad()
                 p.requires_grad = True
 
                 # Initialize temporary gradient components
