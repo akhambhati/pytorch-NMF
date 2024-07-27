@@ -11,7 +11,7 @@ from .operations import unfold, outer_prod, khatri_rao
 class NTF(nn.Module):
     def __init__(self,
             tensor_shape,
-            rank):
+            rank, constraints={}):
 
         super().__init__()
         self.tshape = tensor_shape
@@ -26,6 +26,11 @@ class NTF(nn.Module):
                 self.subnmf.append(NMF((n2, n1), rank=self.rank))
                 self.modes.append(self.subnmf[-1].W)
 
+        for mode in range(self.nmodes):
+            if mode not in constraints:
+                constraints[mode] = {}
+        self.constraints = constraints
+
     def forward(self):
         return outer_prod(self.modes).sum(axis=-1)
 
@@ -39,10 +44,22 @@ class NTF(nn.Module):
         for pn, p in self.subnmf[mode].named_parameters():
             if id(p) not in io_dict:
                 io_dict[id(p)] = list()
-            penalty = torch.zeros_like(p)
+            penalty = self.calc_penalty(mode)
             io_dict[id(p)].append((X_unfold, Xh_unfold, beta, penalty))
-
         return io_dict
+
+    def calc_penalty(self, mode):
+        pen = torch.zeros_like(self.subnmf[mode].W) 
+
+        if ('l1' in self.constraints[mode]):
+            for c in self.constraints[mode]['l1']:
+                assert c.shape == pen.shape
+                pen += c
+
+        if ('ortho' in self.constraints[mode]):
+            for c in self.constraints[mode]['ortho']:
+                pen += (c * (torch.ones((self.rank, self.rank)) - torch.eye(self.rank)) @ self.subnmf[mode].W.detach().T).T
+        return pen
 
     def update_subnmf_kr(self):
         for m in range(self.nmodes): 

@@ -12,17 +12,17 @@ X = X[:, *np.triu_indices(X.shape[-1], k=1)]
 print(X[0])
 
 X = torch.from_numpy(X)
-ntf_mdl = torchnmf.ntf.NTF(X.shape, 3)
+ntf_mdl = torchnmf.ntf.NTF(X.shape, 3, constraints={1: {'l1': [np.random.uniform(size=(X.shape[-1], 3))*100]}})
 print(ntf_mdl.tshape, ntf_mdl().shape)
 for mode in range(ntf_mdl.nmodes):
     print(ntf_mdl.modes[mode].shape,
           ntf_mdl.subnmf[mode].W.shape,
           ntf_mdl.subnmf[mode].H.shape)
 print(torchnmf.operations.khatri_rao(ntf_mdl.modes[:0] + ntf_mdl.modes[1:]).shape)
-ntf_trainer = torchnmf.ntf.NTFTrainer(ntf_mdl, [1.0, 1.0], [1.0, 1.0])
+ntf_trainer = torchnmf.ntf.NTFTrainer(ntf_mdl, [1.0, 1.0], [0.0, 0.0])
 
 print(np.linalg.norm((X - ntf_mdl()).detach().numpy()))
-for i in range(100):
+for i in range(1000):
     output = ntf_trainer.model_online_update_and_filter(X, n_iter=1)
 print(np.linalg.norm((X - ntf_mdl()).detach().numpy()))
 

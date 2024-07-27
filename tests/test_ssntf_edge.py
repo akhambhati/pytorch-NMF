@@ -12,17 +12,16 @@ nN = X.shape[-1]
 Xa = X[:, *np.triu_indices(X.shape[-1], k=1)]
 Ya = np.random.uniform(size=(X.shape[0], 10))
 
-Xa = (Xa.T / Xa.sum(axis=-1)).T
-Ya = (Ya.T / Ya.sum(axis=-1)).T
+#Xa = (Xa.T / Xa.sum(axis=-1)).T
+#Ya = (Ya.T / Ya.sum(axis=-1)).T
 
 X = torch.from_numpy(Xa)
-#Y = torch.from_numpy(Xa) 
 Y = torch.from_numpy(Ya)
 print(X.shape, Y.shape)
 
 ntf_mdl = torchnmf.ssnetntf.SSNetNTF(X.shape, Y.shape, 3, 0, [[0,0]])
-net_trainer = torchnmf.ntf.NTFTrainer(ntf_mdl.submdl_net, [1.0, 1.0], [1.0, 1.0])
-beh_trainer = torchnmf.ntf.NTFTrainer(ntf_mdl.submdl_beh, [1.0, 1.0], [1.0, 1.0])
+net_trainer = torchnmf.ntf.NTFTrainer(ntf_mdl.submdl_net, [1.0, 1.0], [2.0, 2.0])
+beh_trainer = torchnmf.ntf.NTFTrainer(ntf_mdl.submdl_beh, [1.0, 1.0], [2.0, 2.0])
 ntf_trainer = torchnmf.ssnetntf.SSNetNTFTrainer(ntf_mdl, [net_trainer, beh_trainer])
 
 for m in ntf_mdl.submdl_net.modes:
@@ -40,6 +39,19 @@ print(sp_stats.pearsonr(Y.detach().numpy().reshape(-1), ntf_mdl()[1].detach().nu
 
 
 import matplotlib.pyplot as plt
+
+res1 = X.detach().numpy().reshape(-1) / ntf_mdl()[0].detach().numpy().reshape(-1)
+dfit1 = sp_stats.fit(sp_stats.expon, res1)
+#plt.hist(res1, 50, density=True)
+dfit1.plot()
+plt.show()
+
+res1 = Y.detach().numpy().reshape(-1) / ntf_mdl()[1].detach().numpy().reshape(-1)
+dfit1 = sp_stats.fit(sp_stats.expon, res1)
+#plt.hist(res1, 50, density=True)
+dfit1.plot()
+plt.show()
+
 for r in range(ntf_mdl.rank):
     H = ntf_mdl.submdl_net.modes[1].detach()[:, [r]]
     A = np.zeros((nN, nN))
