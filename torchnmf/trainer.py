@@ -76,7 +76,7 @@ class AdaptiveMu(Optimizer):
                 loss_fns = closure()[id(p)]
                 for loss_fn in loss_fns:
                     with torch.enable_grad():
-                        V, WH, beta, penalty = loss_fn
+                        V, WH, beta, penalty, M = loss_fn
                     if not WH.requires_grad:
                         continue
 
@@ -85,20 +85,23 @@ class AdaptiveMu(Optimizer):
                     #      Joint Majorization-Minimization for Nonnegative Matrix
                     #      Factorization with the $\beta $-divergence. 
                     #      arXiv preprint arXiv:2106.15214.
+                    V.add_(eps)
+                    WH.add_(eps)
                     if beta == 2:
                         output_neg = V
                         output_pos = WH
                     elif beta == 1:
-                        output_neg = V / WH.add(eps)
+                        output_neg = V / WH
                         output_pos = torch.ones_like(WH)
                     elif beta == 0:
-                        WH_eps = WH.add(eps)
-                        output_pos = WH_eps.reciprocal_()
+                        output_pos = WH.reciprocal_()
                         output_neg = output_pos.square().mul_(V)
                     else:
-                        WH_eps = WH.add(eps)
-                        output_neg = WH_eps.pow(beta - 2).mul_(V)
-                        output_pos = WH_eps.pow_(beta - 1)
+                        output_neg = WH.pow(beta - 2).mul_(V)
+                        output_pos = WH.pow_(beta - 1)
+
+                    output_neg.mul_(M)
+                    output_pos.mul_(M)
 
                     # Numerator (negative factor) gradient
                     # Retain graph so that backward can be run again using the 
@@ -111,8 +114,8 @@ class AdaptiveMu(Optimizer):
                     # The parameter gradient holds both components (positive - negative)
                     WH.backward(output_pos)
                     __pos = (torch.clone(p.grad).relu_())
-                    #p.grad.add_(-_neg)
-                    p.grad.zero_()
+                    p.grad.add_(-__neg)
+                    #p.grad.zero_()
 
                     # Include penalty
                     __pos.add_(penalty)
@@ -120,6 +123,9 @@ class AdaptiveMu(Optimizer):
                     # Add to the running estimate
                     _neg.add_(__neg)
                     _pos.add_(__pos)
+
+                    # Incorporate Coefficients into Numerator
+                    _neg.mul_(p)
 
                 # Initialize the state variables for gradient averaging.
                 # Enables incremental learning.
@@ -137,13 +143,10 @@ class AdaptiveMu(Optimizer):
                 neg.mul_(1-theta).add_(_neg.mul_(theta))
                 pos.mul_(1-theta).add_(_pos.mul_(theta))
 
-                # Avoid ill-conditioned, zero-valued multipliers
-                neg.add_(eps)
-                pos.add_(eps)
-
                 # Multiplicative Update
-                multiplier = neg.div(pos)
-                p.mul_(multiplier)
+                #multiplier = neg.div(pos)
+                #p.mul_(multiplier)
+                p.data[...] = neg.div(pos)
 
                 # Force the gradient requirement to off
                 p.requires_grad = False
